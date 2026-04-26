@@ -56,10 +56,14 @@ class Tester:
         datapoint = self.data[i]
         value = self.predictor(datapoint)
         guess = self.post_process(value)
-        truth = datapoint.get("Future Price") or float(datapoint["completion"])
+        if "Future Price" in datapoint:
+            truth = datapoint["Future Price"]
+            title = datapoint["Ticker"]
+        else:
+            truth = float(datapoint["completion"])
+            title = datapoint["prompt"]
         error = abs(guess - truth)
         color = self.color_for(error, truth)
-        title = datapoint.get["Ticker"] or datapoint["prompt"]
         return title, guess, truth, error, color
 
     def chart(self, title):
