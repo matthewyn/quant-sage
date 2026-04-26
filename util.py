@@ -56,10 +56,10 @@ class Tester:
         datapoint = self.data[i]
         value = self.predictor(datapoint)
         guess = self.post_process(value)
-        truth = datapoint["Future Price"]
+        truth = datapoint["Future Price"] or float(datapoint["completion"])
         error = abs(guess - truth)
         color = self.color_for(error, truth)
-        title = datapoint["Ticker"]
+        title = datapoint["Ticker"] or datapoint["prompt"]
         return title, guess, truth, error, color
 
     def chart(self, title):
