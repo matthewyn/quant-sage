@@ -5,8 +5,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from itertools import accumulate
 import math
-from tqdm.notebook import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from tqdm.auto import tqdm
+from IPython.display import clear_output
+
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -14,12 +15,11 @@ RED = "\033[91m"
 RESET = "\033[0m"
 COLOR_MAP = {"red": RED, "orange": YELLOW, "green": GREEN}
 
-WORKERS = 3
 DEFAULT_SIZE = 200
 
 
 class Tester:
-    def __init__(self, predictor, data, title=None, size=DEFAULT_SIZE, workers=WORKERS):
+    def __init__(self, predictor, data, title=None, size=DEFAULT_SIZE):
         self.predictor = predictor
         self.data = data
         self.title = title or self.make_title(predictor)
@@ -29,8 +29,8 @@ class Tester:
         self.truths = []
         self.errors = []
         self.colors = []
-        self.workers = workers
-
+        self.correct = 0
+        
     @staticmethod
     def make_title(predictor) -> str:
         return predictor.__name__.replace("__", ".").replace("_", " ").title().replace("Gpt", "GPT")
@@ -54,17 +54,22 @@ class Tester:
 
     def run_datapoint(self, i):
         datapoint = self.data[i]
-        value = self.predictor(datapoint)
-        guess = self.post_process(value)
-        if "Future Price" in datapoint:
-            truth = datapoint["Future Price"]
-            title = datapoint["Ticker"]
-        else:
-            truth = float(datapoint["completion"])
-            title = datapoint["prompt"]
+        match = re.search(r"last price was ([\d.]+)", datapoint["prompt"])
+        last_price = float(match.group(1))
+        guess = self.post_process(self.predictor(datapoint))
+        actual_pct = float(datapoint["completion"])
+        predicted_pct = (guess - last_price) / last_price * 100
+        truth = last_price * (1 + actual_pct / 100)
         error = abs(guess - truth)
         color = self.color_for(error, truth)
-        return title, guess, truth, error, color
+        pieces = datapoint["prompt"].split("TREND: ")
+        title = pieces[1].split("\n")[0] if len(pieces) > 1 else pieces[0]
+        title = title if len(title) <= 40 else title[:40] + "..."
+        if (predicted_pct > 0) == (actual_pct > 0):
+            correct = True
+        else:
+            correct = False
+        return title, guess, truth, error, color, correct
 
     def chart(self, title):
         df = pd.DataFrame(
@@ -93,8 +98,8 @@ class Tester:
             color_discrete_map={"green": "green", "orange": "orange", "red": "red"},
             title=title,
             labels={"truth": "Actual Price", "guess": "Predicted Price"},
-            width=1000,
-            height=800,
+            width=800,
+            height=600,
         )
 
         # Assign customdata per trace (one color/category = one trace)
@@ -141,6 +146,11 @@ class Tester:
         upper = [m + c for m, c in zip(running_means, ci)]
         lower = [m - c for m, c in zip(running_means, ci)]
 
+        # Title with final stats
+        final_mean = running_means[-1]
+        final_ci = ci[-1]
+        title = f"{self.title} Error: {final_mean:,.2f} ± {final_ci:,.2f}"
+
         # Plot
         fig = go.Figure()
 
@@ -179,17 +189,12 @@ class Tester:
             )
         )
 
-        # Title with final stats
-        final_mean = running_means[-1]
-        final_ci = ci[-1]
-        title = f"{self.title} Error: {final_mean:,.2f} ± {final_ci:,.2f}"
-
         fig.update_layout(
             title=title,
             xaxis_title="Number of Datapoints",
-            yaxis_title="Average Absolute Error",
-            width=1000,
-            height=360,
+            yaxis_title="Error",
+            width=800,
+            height=300,
             template="plotly_white",
             showlegend=False,
         )
@@ -198,25 +203,30 @@ class Tester:
 
     def report(self):
         average_error = sum(self.errors) / self.size
-        mse = mean_squared_error(self.truths, self.guesses)
+        mape = (
+            sum(e / t for e, t in zip(self.errors, self.truths) if t != 0)
+            / self.size * 100
+        )
         r2 = r2_score(self.truths, self.guesses) * 100
-        title = f"{self.title} results<br><b>Error:</b> {average_error:,.2f} <b>MSE:</b> {mse:,.0f} <b>r²:</b> {r2:.1f}%"
+        directional_accuracy = (self.correct / self.size) * 100
+        title = f"{self.title} results<br><b>Error:</b> {average_error:,.2f} <b>MAPE:</b> {mape:.2f}% <b>Directional Accuracy:</b> {directional_accuracy:.1f}%"
         self.error_trend_chart()
         self.chart(title)
 
     def run(self):
-        with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            for title, guess, truth, error, color in tqdm(
-                ex.map(self.run_datapoint, range(self.size)), total=self.size
-            ):
-                self.titles.append(title)
-                self.guesses.append(guess)
-                self.truths.append(truth)
-                self.errors.append(error)
-                self.colors.append(color)
-                print(f"{COLOR_MAP[color]}{error:.0f} ", end="")
+        for i in tqdm(range(self.size)):
+            title, guess, truth, error, color, correct = self.run_datapoint(i)
+            self.titles.append(title)
+            self.guesses.append(guess)
+            self.truths.append(truth)
+            self.errors.append(error)
+            self.colors.append(color)
+            if correct:
+                self.correct += 1
+            print(f"{COLOR_MAP[color]}{error:.0f} ", end="")
+        clear_output(wait=True)
         self.report()
 
 
-def evaluate(function, data, size=DEFAULT_SIZE, workers=WORKERS):
-    Tester(function, data, size=size, workers=workers).run()
+def evaluate(function, data, size=DEFAULT_SIZE):
+    Tester(function, data, size=size).run()

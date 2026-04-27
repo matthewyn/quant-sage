@@ -29,6 +29,7 @@ class Tester:
         self.truths = []
         self.errors = []
         self.colors = []
+        self.correct = 0
         self.workers = workers
 
     @staticmethod
@@ -56,11 +57,18 @@ class Tester:
         datapoint = self.data[i]
         value = self.predictor(datapoint)
         guess = self.post_process(value)
+        last_price = datapoint["Last Price"]
+        actual_pct = float(datapoint["Return %"])
+        predicted_pct = (guess - last_price) / last_price * 100
         truth = datapoint["Future Price"]
         error = abs(guess - truth)
         color = self.color_for(error, truth)
         title = datapoint["Ticker"]
-        return title, guess, truth, error, color
+        if (predicted_pct > 0) == (actual_pct > 0):
+            correct = True
+        else:
+            correct = False
+        return title, guess, truth, error, color, correct
 
     def chart(self, title):
         df = pd.DataFrame(
@@ -194,15 +202,19 @@ class Tester:
 
     def report(self):
         average_error = sum(self.errors) / self.size
-        mse = mean_squared_error(self.truths, self.guesses)
+        mape = (
+            sum(e / t for e, t in zip(self.errors, self.truths) if t != 0)
+            / self.size * 100
+        )
         r2 = r2_score(self.truths, self.guesses) * 100
-        title = f"{self.title} results<br><b>Error:</b> {average_error:,.2f} <b>MSE:</b> {mse:,.0f} <b>r²:</b> {r2:.1f}%"
+        directional_accuracy = self.correct / self.size * 100
+        title = f"{self.title} results<br><b>Error:</b> {average_error:,.2f} <b>MAPE:</b> {mape:.2f}% <b>Directional Accuracy:</b> {directional_accuracy:.1f}%"
         self.error_trend_chart()
         self.chart(title)
 
     def run(self):
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            for title, guess, truth, error, color in tqdm(
+            for title, guess, truth, error, color, correct in tqdm(
                 ex.map(self.run_datapoint, range(self.size)), total=self.size
             ):
                 self.titles.append(title)
@@ -210,6 +222,8 @@ class Tester:
                 self.truths.append(truth)
                 self.errors.append(error)
                 self.colors.append(color)
+                if correct:
+                    self.correct += 1
                 print(f"{COLOR_MAP[color]}{error:.0f} ", end="")
         self.report()
 
