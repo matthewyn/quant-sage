@@ -840,7 +840,7 @@ wheels = [
 ]
 
 [[package]]
-name = "finora"
+name = "nova"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
